@@ -1,0 +1,27 @@
+// check login
+export const CHECK_LOGIN_BEGIN = 'CHECK_LOGIN_BEGIN';
+export const CHECK_LOGIN_SUCCESS = 'CHECK_LOGIN_SUCCESS';
+export const CHECK_LOGIN_ERROR = 'CHECK_LOGIN_ERROR';
+
+//user
+export const USER_BEGIN = 'USER_BEGIN';
+export const USER_BEGIN_SUCCESS = 'USER_BEGIN_SUCCESS';
+export const USER_BEGIN_ERROR = 'USER_BEGIN_ERROR';
+
+export const RESTORE_TOKEN = 'RESTORE_TOKEN';
+export const USER_ID = 'USER_ID';
+export const USER_ROLE = 'USER_ROLE';
+export const LOGOUT_USER = 'LOGOUT_USER';
+export const RESTORE_LOGIN = 'RESTORE_LOGIN';
+
+// get_type
+
+export const GETTYPE_BEGIN = 'GETTYPE_BEGIN';
+export const GETTYPE_BEGIN_SUCCESS = 'GETTYPE_BEGIN_SUCCESS';
+export const GETTYPE_BEGIN_ERROR = 'GETTYPE_BEGIN_ERROR';
+
+// get_client
+
+export const GETCLIENT_BEGIN = 'GETCLIENT_BEGIN';
+export const GETCLIENT_BEGIN_SUCCESS = 'GETCLIENT_BEGIN_SUCCESS';
+export const GETCLIENT_BEGIN_ERROR = 'GETCLIENT_BEGIN_ERROR';

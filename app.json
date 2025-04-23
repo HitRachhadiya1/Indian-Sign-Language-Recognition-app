@@ -1,0 +1,35 @@
+{
+  "name": "pose-detection-expo",
+  "displayName": "pose-detection-expo",
+  "expo": {
+    "name": "Sign Language Detection",
+    "slug": "sign-language-detection",
+    "version": "1.0.0",
+    "orientation": "default",
+    "splash": {
+      "image": "./assets/nexa.jpeg",
+      "resizeMode": "contain",
+      "backgroundColor": "#ffffff"
+    },
+    "updates": {
+      "fallbackToCacheTimeout": 0
+    },
+    "assetBundlePatterns": ["**/*"],
+    "ios": {
+      "supportsTablet": true,
+      "infoPlist": {
+        "NSCameraUsageDescription": "This app uses the camera for sign language detection."
+      }
+    },
+    "android": {
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/nexa.jpeg",
+        "backgroundColor": "#FFFFFF"
+      },
+      "permissions": ["CAMERA"]
+    },
+    "web": {
+      "favicon": "./assets/favicon.png"
+    }
+  }
+}
