@@ -11,6 +11,7 @@ import RealtimeDetection from "./RealtimeDetection";
 import Home from "./screens/Home";
 import HomeScreen from "./screens/HomeScreen";
 import WordToSignScreen from "./screens/WordToSignScreen";
+import HandLandmarksScreen from "./HandLandmarksScreen";
 
 // Create navigation stack
 const Stack = createStackNavigator();
@@ -86,6 +87,11 @@ export default function App() {
           name="RealtimeDetection"
           component={RealtimeDetection}
           options={{ title: "Real-time Detection" }}
+        />
+        <Stack.Screen
+          name="HandLandmarks"
+          component={HandLandmarksScreen}
+          options={{ title: "Hand Landmarks" }}
         />
       </Stack.Navigator>
     </NavigationContainer>

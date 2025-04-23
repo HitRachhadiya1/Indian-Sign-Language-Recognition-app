@@ -1,232 +1,545 @@
-import React, { useState, useEffect, useRef } from "react";
-import { StyleSheet, View, Text, Dimensions, Platform } from "react-native";
+import React, { useEffect, useState, useRef } from "react";
 import {
-  Camera,
-  useCameraDevices,
-  useFrameProcessor,
-} from "react-native-vision-camera";
-import { useTensorflowModel } from "react-native-fast-tflite";
-import { useResizePlugin } from "vision-camera-resize-plugin";
-import { Worklets } from "react-native-worklets-core";
+  StyleSheet,
+  Text,
+  View,
+  Dimensions,
+  Platform,
+  TouchableOpacity,
+} from "react-native";
 
-const HandDetection = () => {
-  // Get camera devices
-  const devices = useCameraDevices();
-  const device = devices.back;
+import { Camera, CameraType } from "expo-camera";
 
-  // State for hand detections
-  const [detections, setDetections] = useState([]);
-  const [isProcessing, setIsProcessing] = useState(false);
+import * as tf from "@tensorflow/tfjs";
+import * as ScreenOrientation from "expo-screen-orientation";
+import {
+  bundleResourceIO,
+  cameraWithTensors,
+} from "@tensorflow/tfjs-react-native";
+import { ExpoWebGLRenderingContext } from "expo-gl";
 
-  // Load the TFLite model
-  const handModel = useTensorflowModel(
-    require("./assets/hand_detection_model.tflite")
-  );
+// tslint:disable-next-line: variable-name
+const TensorCamera = cameraWithTensors(Camera);
 
-  // Get resize plugin
-  const { resize } = useResizePlugin();
+const IS_ANDROID = Platform.OS === "android";
+const IS_IOS = Platform.OS === "ios";
 
-  // Create a worklet to update React state from the frame processor
-  const updateDetections = Worklets.createRunInJsFn((newDetections) => {
-    setDetections(newDetections);
-  });
+// Camera preview size.
+const CAM_PREVIEW_WIDTH = Dimensions.get("window").width;
+const CAM_PREVIEW_HEIGHT = CAM_PREVIEW_WIDTH / (IS_IOS ? 9 / 16 : 3 / 4);
 
-  // Define the frame processor
-  const frameProcessor = useFrameProcessor(
-    (frame) => {
-      "worklet";
+// The size of the resized output from TensorCamera.
+const OUTPUT_TENSOR_WIDTH = 192;
+const OUTPUT_TENSOR_HEIGHT = 192;
 
-      // Skip if we're already processing a frame or model isn't loaded
-      if (isProcessing || handModel.state !== "loaded") return;
+// Whether to auto-render TensorCamera preview.
+const AUTO_RENDER = false;
 
-      try {
-        // Mark as processing
-        setIsProcessing(true);
+// Whether to load model from app bundle (true) or through network (false).
+const LOAD_MODEL_FROM_BUNDLE = true;
 
-        // 1. Resize the camera frame to match model input dimensions
-        // Adjust these values to match your specific model's requirements
-        const resized = resize(frame, {
-          scale: {
-            width: 192, // Adjust based on your model's input size
-            height: 192, // Adjust based on your model's input size
-          },
-          pixelFormat: "rgb",
-          dataType: "uint8",
-        });
+// Classification threshold - only show predictions with confidence above this value
+const THRESHOLD = 0.7;
 
-        // 2. Run the model
-        const outputs = handModel.model.runSync([resized]);
+const RealtimeDetection = ({ navigation }) => {
+  const cameraRef = useRef(null);
+  const [tfReady, setTfReady] = useState(false);
+  const [model, setModel] = useState(null);
+  const [prediction, setPrediction] = useState(null);
+  const [fps, setFps] = useState(0);
+  const [orientation, setOrientation] = useState(null);
+  const [cameraType, setCameraType] = useState(CameraType.front);
+  // Use `useRef` so that changing it won't trigger a re-render.
+  const rafId = useRef(null);
+  const [labels, setLabels] = useState([]);
+  const [frameCount, setFrameCount] = useState(0);
+  const [currentSentence, setCurrentSentence] = useState("");
+  const [lastAddedLetter, setLastAddedLetter] = useState("");
+  const [autoAddEnabled, setAutoAddEnabled] = useState(false);
 
-        // 3. Process outputs based on your model's specific output format
-        // The following is an example for a model with similar output to the SSD object detection model
-        // You'll need to adjust this based on your specific model's output format
-
-        const detection_boxes = outputs[0]; // Bounding boxes [y1, x1, y2, x2]
-        const detection_scores = outputs[1]; // Confidence scores
-        const num_detections = outputs[3]
-          ? outputs[3][0]
-          : detection_scores.length;
-
-        const handDetections = [];
-
-        // Process detections
-        for (let i = 0; i < num_detections; i++) {
-          const confidence = detection_scores[i];
-
-          // Filter by confidence threshold
-          if (confidence > 0.5) {
-            // You can adjust this threshold
-            // Extract bounding box coordinates
-            // Note: Some models output [y1, x1, y2, x2], others [x1, y1, x2, y2]
-            // Adjust index access based on your model's output format
-            const boxIndex = i * 4;
-            const y1 = detection_boxes[boxIndex];
-            const x1 = detection_boxes[boxIndex + 1];
-            const y2 = detection_boxes[boxIndex + 2];
-            const x2 = detection_boxes[boxIndex + 3];
-
-            handDetections.push({
-              boundingBox: {
-                x: x1,
-                y: y1,
-                width: x2 - x1,
-                height: y2 - y1,
-              },
-              confidence,
-            });
-          }
-        }
-
-        // Update state in React thread
-        updateDetections(handDetections);
-      } catch (error) {
-        console.error("Error processing frame:", error);
-      } finally {
-        setIsProcessing(false);
-      }
-    },
-    [handModel.state, isProcessing]
-  );
-
-  // Render bounding boxes over detected hands
-  const renderDetections = () => {
-    const { width, height } = Dimensions.get("window");
-
-    return detections.map((detection, index) => {
-      // Convert normalized coordinates to screen coordinates
-      const x = detection.boundingBox.x * width;
-      const y = detection.boundingBox.y * height;
-      const w = detection.boundingBox.width * width;
-      const h = detection.boundingBox.height * height;
-
-      return (
-        <View
-          key={`detection-${index}`}
-          style={[
-            styles.detectionBox,
-            {
-              left: x,
-              top: y,
-              width: w,
-              height: h,
-            },
-          ]}
-        >
-          <Text style={styles.detectionText}>
-            {`Hand ${(detection.confidence * 100).toFixed(0)}%`}
-          </Text>
-        </View>
-      );
-    });
-  };
-
-  // Camera permission state
-  const [hasPermission, setHasPermission] = useState(false);
-
-  // Request camera permissions
   useEffect(() => {
-    (async () => {
-      const status = await Camera.requestCameraPermission();
-      setHasPermission(status === "authorized");
-    })();
+    async function prepare() {
+      rafId.current = null;
+
+      // Set initial orientation.
+      const curOrientation = await ScreenOrientation.getOrientationAsync();
+      setOrientation(curOrientation);
+
+      // Listens to orientation change.
+      ScreenOrientation.addOrientationChangeListener((event) => {
+        setOrientation(event.orientationInfo.orientation);
+      });
+
+      // Camera permission.
+      await Camera.requestCameraPermissionsAsync();
+
+      // Wait for tfjs to initialize the backend.
+      await tf.ready();
+
+      // Load the Teachable Machine model
+      try {
+        // Load the model and metadata
+        const modelJSON = require("./newmodel/model.json");
+        const modelWeights = require("./newmodel/weights.bin");
+        const metadataJSON = require("./newmodel/metadata.json");
+
+        // Set the labels from metadata
+        setLabels(metadataJSON.labels);
+
+        // Create a bundle for the model files
+        const modelBundle = bundleResourceIO(modelJSON, modelWeights);
+
+        // Load model as LayersModel (Teachable Machine uses tf.sequential)
+        const teachableModel = await tf.loadLayersModel(modelBundle);
+
+        setModel(teachableModel);
+        console.log("Teachable Machine model loaded successfully");
+      } catch (error) {
+        console.error("Failed to load model:", error);
+      }
+
+      // Ready!
+      setTfReady(true);
+    }
+
+    prepare();
+
+    // Cleanup function
+    return () => {
+      if (rafId.current != null && rafId.current !== 0) {
+        cancelAnimationFrame(rafId.current);
+        rafId.current = 0;
+      }
+    };
   }, []);
 
-  if (!hasPermission) {
+  // Process each image from camera
+  const handleCameraStream = async (images, updatePreview, gl) => {
+    console.log("Starting camera stream");
+
+    const loop = async () => {
+      const imageTensor = images.next().value;
+
+      if (!imageTensor) {
+        rafId.current = requestAnimationFrame(loop);
+        return;
+      }
+
+      // Skip frames to improve performance
+      setFrameCount((prev) => prev + 1);
+      if (frameCount % 2 !== 0) {
+        // Process only every 2nd frame
+        tf.dispose(imageTensor);
+
+        if (!AUTO_RENDER) {
+          updatePreview();
+          gl.endFrameEXP();
+        }
+
+        rafId.current = requestAnimationFrame(loop);
+        return;
+      }
+
+      if (model) {
+        try {
+          const startTs = Date.now();
+
+          // Hand detection approach using color segmentation
+          const handDetected = tf.tidy(() => {
+            // Convert to grayscale
+            const grayscale = imageTensor.mean(2, true);
+
+            // Skin color detection (simplified)
+            const skinMask = tf.greater(grayscale, tf.scalar(70));
+
+            // Count pixels that are likely skin
+            const skinPixels = skinMask.sum().dataSync()[0];
+            const totalPixels = imageTensor.shape[0] * imageTensor.shape[1];
+
+            // If significant portion is skin, likely a hand
+            return skinPixels > totalPixels * 0.1;
+          });
+
+          // Direct processing approach (simple and reliable)
+          const processedInput = tf.tidy(() => {
+            // Resize to expected input size
+            const resized = tf.image.resizeBilinear(imageTensor, [224, 224]);
+            // Normalize
+            const normalized = tf.div(tf.sub(resized, 127.5), 127.5);
+            // Add batch dimension
+            return normalized.expandDims(0);
+          });
+
+          // Run prediction
+          const predictions = await model.predict(processedInput);
+          const probabilities = await predictions.data();
+
+          // Dispose tensors
+          tf.dispose([processedInput, predictions]);
+
+          // Find max probability
+          let maxProb = 0;
+          let maxIndex = -1;
+          for (let i = 0; i < probabilities.length; i++) {
+            if (probabilities[i] > maxProb) {
+              maxProb = probabilities[i];
+              maxIndex = i;
+            }
+          }
+
+          // Update prediction only if we detected a hand AND confidence is high
+          if (handDetected && maxProb > THRESHOLD && maxIndex < labels.length) {
+            setPrediction({
+              label: labels[maxIndex],
+              confidence: maxProb,
+            });
+          } else {
+            setPrediction(null);
+          }
+
+          const latency = Date.now() - startTs;
+          setFps(Math.floor(1000 / latency));
+          console.log("FPS:", Math.floor(1000 / latency));
+        } catch (error) {
+          console.error("Error during prediction:", error);
+        }
+      }
+
+      // Dispose the tensor after using it
+      tf.dispose(imageTensor);
+
+      // Continue loop if not stopped
+      if (rafId.current === 0) return;
+
+      if (!AUTO_RENDER) {
+        updatePreview();
+        gl.endFrameEXP();
+      }
+
+      rafId.current = requestAnimationFrame(loop);
+    };
+
+    loop();
+  };
+
+  // Add the current prediction to the sentence
+  const addLetterToSentence = () => {
+    if (prediction && prediction.label) {
+      // Only add if it's different from the last letter (to avoid duplicates)
+      if (
+        prediction.label !== lastAddedLetter ||
+        prediction.label === "space"
+      ) {
+        if (prediction.label === "space") {
+          setCurrentSentence((prev) => prev + " ");
+        } else if (
+          prediction.label === "del" ||
+          prediction.label === "delete"
+        ) {
+          setCurrentSentence((prev) => prev.slice(0, -1));
+        } else {
+          setCurrentSentence((prev) => prev + prediction.label);
+        }
+        setLastAddedLetter(prediction.label);
+      }
+    }
+  };
+
+  // Clear the current sentence
+  const clearSentence = () => {
+    setCurrentSentence("");
+    setLastAddedLetter("");
+  };
+
+  // Toggle auto-add functionality
+  const toggleAutoAdd = () => {
+    setAutoAddEnabled(!autoAddEnabled);
+  };
+
+  // Effect to handle auto-adding letters
+  useEffect(() => {
+    let autoAddTimer = null;
+
+    if (autoAddEnabled && prediction && prediction.confidence > 0.85) {
+      autoAddTimer = setTimeout(() => {
+        addLetterToSentence();
+      }, 800); // Wait 0.8 seconds before auto-adding
+    }
+
+    return () => {
+      if (autoAddTimer) clearTimeout(autoAddTimer);
+    };
+  }, [prediction, autoAddEnabled]);
+
+  const renderPrediction = () => {
     return (
-      <View style={styles.permissionContainer}>
-        <Text>Camera permission is required for hand detection</Text>
+      <View style={styles.predictionContainer}>
+        {prediction ? (
+          <>
+            <Text style={styles.predictionText}>Sign: {prediction.label}</Text>
+            <Text style={styles.confidenceText}>
+              {(prediction.confidence * 100).toFixed(1)}%
+            </Text>
+          </>
+        ) : (
+          <Text style={styles.predictionText}>No sign detected</Text>
+        )}
+
+        <View style={styles.sentenceContainer}>
+          <Text style={styles.sentenceText}>
+            {currentSentence || "Your sentence will appear here"}
+          </Text>
+        </View>
+
+        <View style={styles.buttonContainer}>
+          <TouchableOpacity
+            style={styles.button}
+            onPress={addLetterToSentence}
+            disabled={!prediction}
+          >
+            <Text style={styles.buttonText}>Add Letter</Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity style={styles.button} onPress={clearSentence}>
+            <Text style={styles.buttonText}>Clear</Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={[styles.button, autoAddEnabled ? styles.buttonActive : {}]}
+            onPress={toggleAutoAdd}
+          >
+            <Text style={styles.buttonText}>
+              {autoAddEnabled ? "Auto: ON" : "Auto: OFF"}
+            </Text>
+          </TouchableOpacity>
+        </View>
+      </View>
+    );
+  };
+
+  const renderFps = () => {
+    return (
+      <View style={styles.fpsContainer}>
+        <Text>FPS: {fps}</Text>
+      </View>
+    );
+  };
+
+  const renderCameraTypeSwitcher = () => {
+    return (
+      <View
+        style={styles.cameraTypeSwitcher}
+        onTouchEnd={handleSwitchCameraType}
+      >
+        <Text>
+          Switch to{" "}
+          {cameraType === CameraType.front ? CameraType.back : CameraType.front}{" "}
+          camera
+        </Text>
+      </View>
+    );
+  };
+
+  const handleSwitchCameraType = () => {
+    if (cameraType === CameraType.front) {
+      setCameraType(CameraType.back);
+    } else {
+      setCameraType(CameraType.front);
+    }
+  };
+
+  const isPortrait = () => {
+    return (
+      orientation === ScreenOrientation.Orientation.PORTRAIT_UP ||
+      orientation === ScreenOrientation.Orientation.PORTRAIT_DOWN
+    );
+  };
+
+  const getTextureRotationAngleInDegrees = () => {
+    // On Android, the camera texture will rotate behind the scene as the phone
+    // changes orientation, so we don't need to rotate it in TensorCamera.
+    if (IS_ANDROID) {
+      return 0;
+    }
+
+    // For iOS, the camera texture won't rotate automatically. Calculate the
+    // rotation angles here which will be passed to TensorCamera to rotate it
+    // internally.
+    switch (orientation) {
+      // Not supported on iOS as of 11/2021, but add it here just in case.
+      case ScreenOrientation.Orientation.PORTRAIT_DOWN:
+        return 180;
+      case ScreenOrientation.Orientation.LANDSCAPE_LEFT:
+        return cameraType === CameraType.front ? 270 : 90;
+      case ScreenOrientation.Orientation.LANDSCAPE_RIGHT:
+        return cameraType === CameraType.front ? 90 : 270;
+      default:
+        return 0;
+    }
+  };
+
+  const renderLandmarksButton = () => {
+    return (
+      <TouchableOpacity
+        style={styles.landmarksButton}
+        onPress={() => navigation.navigate("HandLandmarks")}
+      >
+        <Text style={styles.buttonText}>Hand Landmarks</Text>
+      </TouchableOpacity>
+    );
+  };
+
+  if (!tfReady) {
+    return (
+      <View style={styles.loadingMsg}>
+        <Text>Loading TensorFlow.js and model...</Text>
+      </View>
+    );
+  } else {
+    return (
+      <View
+        style={
+          isPortrait() ? styles.containerPortrait : styles.containerLandscape
+        }
+      >
+        <TensorCamera
+          ref={cameraRef}
+          style={styles.camera}
+          autorender={AUTO_RENDER}
+          type={cameraType}
+          // tensor related props
+          resizeWidth={OUTPUT_TENSOR_WIDTH}
+          resizeHeight={OUTPUT_TENSOR_HEIGHT}
+          resizeDepth={3}
+          rotation={getTextureRotationAngleInDegrees()}
+          onReady={handleCameraStream}
+          useCustomShadersToResize={false}
+          cameraTextureHeight={OUTPUT_TENSOR_HEIGHT}
+          cameraTextureWidth={OUTPUT_TENSOR_WIDTH}
+        />
+        {renderPrediction()}
+        {renderFps()}
+        {renderCameraTypeSwitcher()}
+        {renderLandmarksButton()}
       </View>
     );
   }
-
-  if (device == null) {
-    return (
-      <View style={styles.permissionContainer}>
-        <Text>Loading camera...</Text>
-      </View>
-    );
-  }
-
-  return (
-    <View style={styles.container}>
-      <Camera
-        style={styles.camera}
-        device={device}
-        isActive={true}
-        frameProcessor={frameProcessor}
-        frameProcessorFps={5} // Process 5 frames per second for better performance
-      />
-
-      {renderDetections()}
-
-      <View style={styles.infoContainer}>
-        <Text style={styles.infoText}>
-          {handModel.state === "loaded" ? "Model loaded" : "Loading model..."}
-        </Text>
-        <Text style={styles.infoText}>
-          {`Detected: ${detections.length} hands`}
-        </Text>
-      </View>
-    </View>
-  );
 };
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
+  containerPortrait: {
+    position: "relative",
+    width: CAM_PREVIEW_WIDTH,
+    height: CAM_PREVIEW_HEIGHT,
+    marginTop: Dimensions.get("window").height / 2 - CAM_PREVIEW_HEIGHT / 2,
+  },
+  containerLandscape: {
+    position: "relative",
+    width: CAM_PREVIEW_HEIGHT,
+    height: CAM_PREVIEW_WIDTH,
+    marginLeft: Dimensions.get("window").height / 2 - CAM_PREVIEW_HEIGHT / 2,
+  },
+  loadingMsg: {
+    position: "absolute",
+    width: "100%",
+    height: "100%",
+    alignItems: "center",
+    justifyContent: "center",
   },
   camera: {
-    flex: 1,
+    width: "100%",
+    height: "100%",
+    zIndex: 1,
   },
-  permissionContainer: {
-    flex: 1,
+  predictionContainer: {
+    position: "absolute",
+    bottom: 40,
+    left: 10,
+    right: 10,
+    backgroundColor: "rgba(0, 0, 0, 0.7)",
+    padding: 20,
+    borderRadius: 10,
+    alignItems: "center",
+    zIndex: 20,
+  },
+  predictionText: {
+    color: "white",
+    fontSize: 24,
+    fontWeight: "bold",
+    textAlign: "center",
+  },
+  confidenceText: {
+    color: "white",
+    fontSize: 16,
+    marginTop: 5,
+  },
+  fpsContainer: {
+    position: "absolute",
+    top: 10,
+    left: 10,
+    width: 80,
+    alignItems: "center",
+    backgroundColor: "rgba(255, 255, 255, .7)",
+    borderRadius: 2,
+    padding: 8,
+    zIndex: 20,
+  },
+  cameraTypeSwitcher: {
+    position: "absolute",
+    top: 10,
+    right: 10,
+    width: 180,
+    alignItems: "center",
+    backgroundColor: "rgba(255, 255, 255, .7)",
+    borderRadius: 2,
+    padding: 8,
+    zIndex: 20,
+  },
+  sentenceContainer: {
+    backgroundColor: "rgba(255, 255, 255, 0.9)",
+    borderRadius: 5,
+    padding: 10,
+    width: "100%",
+    marginVertical: 10,
+    minHeight: 50,
     justifyContent: "center",
+  },
+  sentenceText: {
+    color: "black",
+    fontSize: 18,
+    textAlign: "center",
+  },
+  buttonContainer: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    width: "100%",
+    marginTop: 10,
+  },
+  button: {
+    backgroundColor: "#4CAF50",
+    padding: 10,
+    borderRadius: 5,
+    minWidth: 100,
     alignItems: "center",
   },
-  detectionBox: {
-    position: "absolute",
-    borderWidth: 2,
-    borderColor: "yellow",
-    backgroundColor: "transparent",
+  buttonActive: {
+    backgroundColor: "#FF9800",
   },
-  detectionText: {
-    backgroundColor: "yellow",
-    color: "black",
-    fontSize: 14,
-    padding: 2,
-  },
-  infoContainer: {
-    position: "absolute",
-    top: 0,
-    left: 0,
-    right: 0,
-    backgroundColor: "rgba(0, 0, 0, 0.5)",
-    padding: 10,
-  },
-  infoText: {
+  buttonText: {
     color: "white",
-    fontSize: 14,
+    fontWeight: "bold",
+  },
+  landmarksButton: {
+    position: "absolute",
+    bottom: 20,
+    right: 20,
+    backgroundColor: "#2196F3",
+    padding: 10,
+    borderRadius: 5,
+    width: 160,
+    alignItems: "center",
+    zIndex: 20,
   },
 });
 
-export default HandDetection;
+export default RealtimeDetection;
